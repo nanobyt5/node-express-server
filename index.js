@@ -1,70 +1,70 @@
-const Joi = require('joi');
-const express = require('express');
-const cors = require('cors');
-const app = express();
-
-app.use(express.json());
-app.use(cors());
-// app.use(express.urlencoded({ extended: false }));
-
-const fs = require('fs');
-const { string, ValidationError } = require('joi');
-
-let heroes;
-
-fs.readFile('heroes.json', 'utf8', (err, data) => {
-    if (err) {
-        console.error(err);
-        return;
-    }
-    heroes = JSON.parse(data);
+const querystring = require("querystring");
+const AWS = require('aws-sdk');
+AWS.config.update({
+    accessKeyId: process.env.ACCESS_ID,
+    secretAccessKey: process.env.ACCESS_KEY,
+    region: 'ap-southeast-1'
 });
+const s3 = new AWS.S3();
 
-app.get('/api/heroes', (req, res) => {
-    res.send(heroes);
-});
+const upload = async (data) => {
+    console.log("Uploading task to bucket");
 
-app.get('/api/heroes/:name', (req, res) => {
-    const hero = heroes.members.find(h => h.name === req.params.name);
-    if (!hero) {
-        res.status(404).send('The hero is not in database!');
-        return;
-    }
-    console.log(`Hero ${hero.name} found!`);
-    res.send(hero);
-});
-
-app.post('/api/heroes', (req, res) => {
-    const schema = Joi.object({
-        name: Joi.string().required(),
-        age: Joi.number().positive().required(),
-        secretIdentity: Joi.string().required(),
-        powers: Joi.array().required()
-    });
-    const validateResult = schema.validate(req.body);
-    console.log(validateResult.error);
-
-    if (validateResult.error) {
-        return res.status(400).json({
-            message: validateResult.error.details[0].message
-        })
-    }
-
-    const hero = {
-        name: req.body.name,
-        age: req.body.age,
-        secretIdentity: req.body.secretIdentity,
-        powers: req.body.powers
+    const params = {
+        ACL: "public-read",
+        Body: JSON.stringify(data),
+        ContentType: "application/json",
+        Bucket: "local-testing-nazryl",
+        Key: "Storage/heroes.json"
     };
-    heroes.members.push(hero);
 
-    fs.writeFile('heroes.json', JSON.stringify(heroes, null, 4), function (err) {
-        if (err) throw err;
-        console.log(`Added ${hero.name} to JSON file!`);
-        res.send(JSON.stringify({ status: 'Great Success!' }));
+    return await new Promise((resolve, reject) => {
+        s3.putObject(params, (err, data) => {
+            if (err) {
+                console.log(err);
+                reject(err);
+            } else {
+                resolve(data);
+            }
+        });
     });
-});
+};
 
-// PORT "set PORT=3001"
-const port = process.env.PORT | 3001;
-app.listen(port, () => console.log(`Listening on port ${port}...`));
+function readS3() {
+    const params = {
+        Bucket: "local-testing-nazryl",
+        Key: "Storage/heroes.json"
+    };
+    return new Promise((resolve, reject) => {
+        s3.getObject(params, (err, data) => {
+            if (err) reject(err);
+            else resolve(data.Body.toString('utf-8'));
+        });
+    });
+}
+
+exports.handler = async (event, context, callback) => {
+    const res = {
+        statusCode: null,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+            'Access-Control-Allow-Credentials': true,
+            'Content-Type': 'application/json'
+        },
+        body: ""
+    };
+
+    const params = querystring.parse(event.body);
+
+    res.statusCode = 200;
+
+    if (params.command === "/heroes") {
+        res.body = params.text;
+        upload(JSON.parse(querystring.parse(event.body)));
+    } else {
+        res.body = await readS3();
+    }
+
+    callback(null, res);
+};
